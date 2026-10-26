@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the Thermopsis monitor as static BOINC apps against per-target BOINC builds in /opt/bitboinc-src/boinc-<target> (edit the path to your own build trees).
 #   ./build_thermopsis_monitor.sh [linux64 aarch64]     Output: out/thermopsis_v<VER>_<platform>
-VER=3
+VER=5
 mkdir -p out
 SRC="thermopsis_sensors.c thermopsis_core.c"
 build() {  # tag cxx boinc-dir output

@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #define INV_CAP 24576
-#define REPORT_CAP 65536
+#define REPORT_CAP 60000
 
 static int has_temperature(const ts_reading_t *r, int n)
 {
@@ -72,6 +72,8 @@ int thermopsis_run(const char *sysroot, int max_cycles_for_tests)
         snprintf(rep, sizeof rep, "{\"v\":1,\"t\":%lld,\"nosensors\":true,\"inv\":\"%s\",\"inventory\":%s}", (long long)time(NULL), hash, inv[0] ? inv : "null");
         glue_send_report(rep);
         glue_log("no temperature sensors found: reported once, finishing");
+        /* the client collects a trickle message while the task is alive: leaving at once loses it, and the project then never learns that this computer has no sensors */
+        interruptible_sleep(20);
         glue_done(0);
         return 0;
     }
@@ -107,7 +109,7 @@ int thermopsis_run(const char *sysroot, int max_cycles_for_tests)
     /* send what is left, then end: a new task will follow */
     if (w.samples > 0) {
         int l = ts_window_json(&w, time(NULL), hash, first_report ? inv : NULL, rep, sizeof rep);
-        if (l > 0) glue_send_report(rep);
+        if (l > 0) { glue_send_report(rep); interruptible_sleep(20); }      /* time for the client to take the last report */
     }
     glue_done(0);
     return 0;

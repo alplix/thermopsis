@@ -84,28 +84,71 @@ static int globber(const char *pattern, glob_t *g) { return glob(pattern, 0, NUL
 
 /* ---------------------------------------------------------------- GPU library (NVIDIA), loaded at run time */
 
+__attribute__((unused)) static int smi_fields(char *line, char **f, int maxf)
+{
+    int k = 0;
+    line[strcspn(line, "\r\n")] = 0;
+    char *p = line;
+    while (k < maxf) {
+        f[k++] = p;
+        char *c = strstr(p, ", ");
+        if (!c) break;
+        *c = 0;
+        p = c + 2;
+    }
+    return k;
+}
+__attribute__((unused)) static int smi_num(const char *s, double *v)       /* "[N/A]", "[Not Supported]" and empty fields have no value */
+{
+    if (!s || !s[0] || s[0] == '[') return -1;
+    char *end;
+    *v = strtod(s, &end);
+    return end == s ? -1 : 0;
+}
 #ifdef TS_STATIC_BUILD
 /* A static binary cannot dlopen the driver library reliably (glibc mismatch), so the driver's own tool is asked instead (it is only run when it exists). */
 static void nvml_read(ts_reading_t *out, int *n, int max)
 {
     static int have = -1;
     if (have == 0) return;
-    FILE *f = popen("nvidia-smi --query-gpu=index,temperature.gpu,power.draw,fan.speed,clocks.sm,utilization.gpu,clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_thermal_slowdown --format=csv,noheader,nounits 2>/dev/null", "r");
+    FILE *f = popen("nvidia-smi --query-gpu=index,temperature.gpu,power.draw,fan.speed,clocks.sm,utilization.gpu,"
+                    "clocks_throttle_reasons.hw_thermal_slowdown,clocks_throttle_reasons.sw_thermal_slowdown,"
+                    "memory.used,memory.total,clocks.mem,clocks.max.mem,clocks.max.sm,power.limit,pstate,"
+                    "clocks_throttle_reasons.sw_power_cap,clocks_throttle_reasons.hw_slowdown,clocks_throttle_reasons.hw_power_brake_slowdown,"
+                    "pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max --format=csv,noheader,nounits 2>/dev/null", "r");
     if (!f) return;
-    char line[256];
+    char line[600];
     int rows = 0;
     while (fgets(line, sizeof line, f)) {
-        double idx, t, w, fan, mhz, u;
-        char hw[24] = "", sw[24] = "";
-        if (sscanf(line, "%lf, %lf, %lf, %lf, %lf, %lf, %23[^,], %23s", &idx, &t, &w, &fan, &mhz, &u, hw, sw) < 6) continue;
+        char *fl[24];
+        double v, t, mu = -1, mt = -1;
+        if (smi_fields(line, fl, 24) < 6 || smi_num(fl[0], &v) != 0) continue;
+        int i = (int)v;
         rows++;
-        int i = (int)idx;
-        add_reading(out, n, max, t, "t.nvml.%d.gpu", i);
-        add_reading(out, n, max, w, "p.nvml.%d.board", i);
-        add_reading(out, n, max, fan, "f.nvml.%d.fan_percent", i);
-        add_reading(out, n, max, mhz, "c.nvml.%d.sm_mhz", i);
-        add_reading(out, n, max, u, "u.nvml.%d.gpu_percent", i);
-        if (hw[0] && sw[0]) add_reading(out, n, max, (strstr(hw, "Active") && !strstr(hw, "Not")) || (strstr(sw, "Active") && !strstr(sw, "Not")) ? 1.0 : 0.0, "x.nvml.%d.thermal_throttle", i);
+        if (smi_num(fl[1], &v) == 0) add_reading(out, n, max, v, "t.nvml.%d.gpu", i);
+        if (smi_num(fl[2], &v) == 0) add_reading(out, n, max, v, "p.nvml.%d.board", i);
+        if (smi_num(fl[3], &v) == 0) add_reading(out, n, max, v, "f.nvml.%d.fan_percent", i);
+        if (smi_num(fl[4], &v) == 0) add_reading(out, n, max, v, "c.nvml.%d.sm_mhz", i);
+        if (smi_num(fl[5], &v) == 0) add_reading(out, n, max, v, "u.nvml.%d.gpu_percent", i);
+        #define ACTIVE(x) ((x) && strstr((x), "Active") && !strstr((x), "Not"))
+        t = (ACTIVE(fl[6]) || ACTIVE(fl[7])) ? 1.0 : 0.0;
+        if (fl[6][0] && fl[7][0]) add_reading(out, n, max, t, "x.nvml.%d.thermal_throttle", i);
+        if (smi_num(fl[8], &mu) == 0 && smi_num(fl[9], &mt) == 0 && mt > 0) {
+            add_reading(out, n, max, 100.0 * mu / mt, "m.nvml.%d.vram_used_percent", i);
+            add_reading(out, n, max, mu, "x.nvml.%d.vram_used_mb", i);
+        }
+        if (smi_num(fl[10], &v) == 0) add_reading(out, n, max, v, "c.nvml.%d.mem_mhz", i);
+        if (smi_num(fl[11], &v) == 0) add_reading(out, n, max, v, "c.nvml.%d.mem_max_mhz", i);
+        if (smi_num(fl[12], &v) == 0) add_reading(out, n, max, v, "c.nvml.%d.sm_max_mhz", i);
+        if (smi_num(fl[13], &v) == 0) add_reading(out, n, max, v, "p.nvml.%d.limit", i);
+        if (fl[14][0] == 'P' && smi_num(fl[14] + 1, &v) == 0) add_reading(out, n, max, v, "x.nvml.%d.pstate", i);
+        if (fl[15][0]) add_reading(out, n, max, ACTIVE(fl[15]) ? 1.0 : 0.0, "x.nvml.%d.thr_power", i);
+        if (fl[16][0] && fl[17][0]) add_reading(out, n, max, (ACTIVE(fl[16]) || ACTIVE(fl[17])) ? 1.0 : 0.0, "x.nvml.%d.thr_hardware", i);
+        if (smi_num(fl[18], &v) == 0) add_reading(out, n, max, v, "c.nvml.%d.pcie_gen", i);
+        if (smi_num(fl[19], &v) == 0) add_reading(out, n, max, v, "c.nvml.%d.pcie_gen_max", i);
+        if (smi_num(fl[20], &v) == 0) add_reading(out, n, max, v, "c.nvml.%d.pcie_width", i);
+        if (smi_num(fl[21], &v) == 0) add_reading(out, n, max, v, "c.nvml.%d.pcie_width_max", i);
+        #undef ACTIVE
     }
     int st = pclose(f);
     if (rows == 0 && st != 0) have = 0;   /* no such tool: do not try again */
@@ -188,12 +231,19 @@ static void rapl_read(const char *root, ts_reading_t *out, int *n, int max)
     for (size_t i = 0; i < g.gl_pathc && i < RAPL_MAX; i++) {
         char p[600], name[64];
         double e, range = 0;
-        snprintf(p, sizeof p, "%s/energy_uj", g.gl_pathv[i]);
-        if (read_num(p, &e) != 0) continue;
         snprintf(p, sizeof p, "%s/name", g.gl_pathv[i]);
         if (read_file(p, name, sizeof name) != 0) snprintf(name, sizeof name, "package-%zu", i);
         clean(name);
         if (strncmp(name, "package", 7) != 0) continue;
+        for (int c = 0; c < 3; c++) {                 /* power limits (long term = PL1, short term = PL2): readable without root */
+            char cn[32], pl[600];
+            double lim;
+            snprintf(p, sizeof p, "%s/constraint_%d_name", g.gl_pathv[i], c);
+            snprintf(pl, sizeof pl, "%s/constraint_%d_power_limit_uw", g.gl_pathv[i], c);
+            if (read_file(p, cn, sizeof cn) == 0 && read_num(pl, &lim) == 0 && lim > 0) { clean(cn); add_reading(out, n, max, lim / 1e6, "p.rapl.%s.limit_%s_w", name, cn); }
+        }
+        snprintf(p, sizeof p, "%s/energy_uj", g.gl_pathv[i]);
+        if (read_num(p, &e) != 0) continue;
         snprintf(p, sizeof p, "%s/max_energy_range_uj", g.gl_pathv[i]);
         read_num(p, &range);
         if (rapl_have_prev[i] && now > rapl_prev_t[i]) {
@@ -243,6 +293,80 @@ static void pci_name(const char *root, const char *ven, const char *dev, char *o
         fclose(fp);
         if (out[0]) return;
     }
+}
+
+/* ---------------------------------------------------------------- PCIe links, disk counters, context (all readable without root) */
+
+/* "8.0 GT/s PCIe" -> 8.0 ; the link of a device: speed and width now and at most (a graphics card slows its link down when idle: the maximum shows what it can do) */
+static void pcie_one(const char *dir, const char *label, ts_reading_t *out, int *n, int max)
+{
+    char p[640], b[64];
+    static const char *files[4] = { "current_link_speed", "current_link_width", "max_link_speed", "max_link_width" };
+    static const char *names[4] = { "speed_gts", "width", "max_speed_gts", "max_width" };
+    for (int i = 0; i < 4; i++) {
+        snprintf(p, sizeof p, "%s/%s", dir, files[i]);
+        if (read_file(p, b, sizeof b) == 0 && b[0] >= '0' && b[0] <= '9') add_reading(out, n, max, atof(b), "c.pcie.%s.%s", label, names[i]);
+    }
+}
+
+static void pcie_read(const char *root, ts_reading_t *out, int *n, int max)
+{
+    glob_t g;
+    char pat[512], dir[640], lab[32];
+    snprintf(pat, sizeof pat, "%s/sys/class/drm/card[0-9]", root);
+    if (glob(pat, 0, NULL, &g) == 0) {
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            snprintf(dir, sizeof dir, "%s/device", g.gl_pathv[i]);
+            snprintf(lab, sizeof lab, "gpu%s", strrchr(g.gl_pathv[i], '/') + 5);          /* card0 -> gpu0 */
+            pcie_one(dir, lab, out, n, max);
+        }
+        globfree(&g);
+    }
+    snprintf(pat, sizeof pat, "%s/sys/class/nvme/nvme[0-9]*", root);
+    if (glob(pat, 0, NULL, &g) == 0) {
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            snprintf(dir, sizeof dir, "%s/device", g.gl_pathv[i]);
+            snprintf(lab, sizeof lab, "%s", strrchr(g.gl_pathv[i], '/') + 1);
+            clean(lab);
+            pcie_one(dir, lab, out, n, max);
+        }
+        globfree(&g);
+    }
+}
+
+/* bytes read and written since boot per whole disk (the minimum and maximum of a window give the rate); the life-long totals need root (SMART) */
+static void disk_read(const char *root, ts_reading_t *out, int *n, int max)
+{
+    glob_t g;
+    char pat[512];
+    snprintf(pat, sizeof pat, "%s/sys/block/*/stat", root);
+    if (glob(pat, 0, NULL, &g) != 0) return;
+    for (size_t i = 0; i < g.gl_pathc; i++) {
+        char dev[64], line[400];
+        const char *e = strstr(g.gl_pathv[i], "/sys/block/");
+        if (!e) continue;
+        snprintf(dev, sizeof dev, "%s", e + 11);
+        char *sl = strchr(dev, '/');
+        if (sl) *sl = 0;
+        if (!strncmp(dev, "loop", 4) || !strncmp(dev, "ram", 3) || !strncmp(dev, "zram", 4) || !strncmp(dev, "dm-", 3) || !strncmp(dev, "md", 2) || !strncmp(dev, "sr", 2) || !strncmp(dev, "fd", 2) || !strncmp(dev, "nbd", 3)) continue;
+        if (read_file(g.gl_pathv[i], line, sizeof line) != 0) continue;
+        unsigned long long f[11] = { 0 };
+        if (sscanf(line, "%llu %llu %llu %llu %llu %llu %llu", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6]) < 7) continue;
+        clean(dev);
+        add_reading(out, n, max, (double)f[2] * 512.0, "x.disk.%s.read_bytes", dev);
+        add_reading(out, n, max, (double)f[6] * 512.0, "x.disk.%s.written_bytes", dev);
+    }
+    globfree(&g);
+}
+
+static void context_read(const char *root, ts_reading_t *out, int *n, int max)
+{
+    char p[512], b[128];
+    snprintf(p, sizeof p, "%s/proc/uptime", root);
+    if (read_file(p, b, sizeof b) == 0) add_reading(out, n, max, atof(b), "x.ctx.uptime_s");
+    time_t t = time(NULL);
+    struct tm lt;
+    if (localtime_r(&t, &lt)) add_reading(out, n, max, (double)lt.tm_gmtoff / 60.0, "x.ctx.tz_min");      /* UTC offset only: no city, no country */
 }
 
 static double prev_idle = -1, prev_total = -1;   /* for the CPU utilisation between two samples */
@@ -350,17 +474,20 @@ int ts_read_sensors(const char *sysroot, ts_reading_t *out, int max)
     if (have_thr) add_reading(out, &n, max, thr, "x.cpu.thermal_throttle_count");
 
     /* CPU frequency (mean over the cores) */
-    double fsum = 0;
+    double fsum = 0, fmin = 1e12, fmax = 0;
     int fn = 0;
     path_join(pat, sizeof pat, root, "/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq");
     if (globber(pat, &g) == 0) {
         for (size_t i = 0; i < g.gl_pathc; i++) {
             double v;
-            if (read_num(g.gl_pathv[i], &v) == 0) { fsum += v / 1000.0; fn++; }
+            if (read_num(g.gl_pathv[i], &v) == 0) { fsum += v / 1000.0; fn++; if (v / 1000.0 < fmin) fmin = v / 1000.0; if (v / 1000.0 > fmax) fmax = v / 1000.0; }
         }
         globfree(&g);
     }
-    if (fn) add_reading(out, &n, max, fsum / fn, "c.cpu.mhz_mean");
+    if (fn) {
+        add_reading(out, &n, max, fsum / fn, "c.cpu.mhz_mean");
+        if (fn > 1) { add_reading(out, &n, max, fmin, "c.cpu.mhz_min"); add_reading(out, &n, max, fmax, "c.cpu.mhz_max"); }     /* slowest and fastest core */
+    }
 
     /* CPU utilisation between two samples, load, memory */
     path_join(pat, sizeof pat, root, "/proc/stat");
@@ -412,6 +539,16 @@ int ts_read_sensors(const char *sysroot, ts_reading_t *out, int max)
                 if (read_num(pat, &v) == 0 && v / 10.0 > -40 && v / 10.0 < 150) add_reading(out, &n, max, v / 10.0, "t.battery.%s", nm);
                 snprintf(pat, sizeof pat, "%s/capacity", p);
                 if (read_num(pat, &v) == 0) add_reading(out, &n, max, v, "b.battery.%s.percent", nm);
+                {   /* wear: full-charge capacity against the design capacity, and the charge cycles */
+                    double full = -1, design = -1, cyc;
+                    snprintf(pat, sizeof pat, "%s/energy_full", p);
+                    if (read_num(pat, &full) != 0) { snprintf(pat, sizeof pat, "%s/charge_full", p); if (read_num(pat, &full) != 0) full = -1; }
+                    snprintf(pat, sizeof pat, "%s/energy_full_design", p);
+                    if (read_num(pat, &design) != 0) { snprintf(pat, sizeof pat, "%s/charge_full_design", p); if (read_num(pat, &design) != 0) design = -1; }
+                    if (full > 0 && design > 0 && full / design < 1.5) add_reading(out, &n, max, 100.0 * full / design, "b.battery.%s.health_percent", nm);
+                    snprintf(pat, sizeof pat, "%s/cycle_count", p);
+                    if (read_num(pat, &cyc) == 0 && cyc >= 0 && cyc < 100000) add_reading(out, &n, max, cyc, "x.battery.%s.cycles", nm);
+                }
                 {   /* power the battery delivers while the computer runs on it (a figure of the whole computer, laptops only) */
                     char st[24];
                     snprintf(pat, sizeof pat, "%s/status", p);
@@ -437,6 +574,9 @@ int ts_read_sensors(const char *sysroot, ts_reading_t *out, int max)
         globfree(&g);
     }
 
+    pcie_read(root, out, &n, max);
+    disk_read(root, out, &n, max);
+    context_read(root, out, &n, max);
     if (is_real(sysroot)) rapl_read(root, out, &n, max);
     if (is_real(sysroot)) nvml_read(out, &n, max);
     return n;
@@ -495,6 +635,29 @@ static void sb_kv_num(sb_t *s, const char *k, double v, int *first)
     sb_fmt(s, ":%.6g", v);
 }
 
+/* NVIDIA cards as the driver tool describes them (once per inventory): name, driver version, memory in MB, PCIe maximum */
+static int smi_inv_n;
+static char smi_inv_name[8][80], smi_inv_drv[8][32];
+static double smi_inv_vram[8], smi_inv_gen[8], smi_inv_wid[8];
+static void smi_inventory(void)
+{
+    smi_inv_n = 0;
+    FILE *f = popen("nvidia-smi --query-gpu=name,driver_version,memory.total,pcie.link.gen.max,pcie.link.width.max --format=csv,noheader,nounits 2>/dev/null", "r");
+    if (!f) return;
+    char line[400];
+    while (smi_inv_n < 8 && fgets(line, sizeof line, f)) {
+        char *fl[8];
+        if (smi_fields(line, fl, 8) < 5) continue;
+        int k = smi_inv_n++;
+        snprintf(smi_inv_name[k], sizeof smi_inv_name[k], "%s", fl[0]);
+        snprintf(smi_inv_drv[k], sizeof smi_inv_drv[k], "%s", fl[1]);
+        if (smi_num(fl[2], &smi_inv_vram[k]) != 0) smi_inv_vram[k] = 0;
+        if (smi_num(fl[3], &smi_inv_gen[k]) != 0) smi_inv_gen[k] = 0;
+        if (smi_num(fl[4], &smi_inv_wid[k]) != 0) smi_inv_wid[k] = 0;
+    }
+    pclose(f);
+}
+
 uint32_t ts_hash(const char *s, size_t n)    /* FNV-1a */
 {
     uint32_t h = 2166136261u;
@@ -541,9 +704,25 @@ int ts_inventory_json(const char *sysroot, char *buf, size_t cap)
             fclose(f);
         }
         int cf = 1;
+        char gv[64], ep[64], nt[16], mx[32], mn[32];
+        snprintf(p, sizeof p, "%s/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", root);
+        if (read_file(p, gv, sizeof gv) != 0) gv[0] = 0;
+        snprintf(p, sizeof p, "%s/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference", root);
+        if (read_file(p, ep, sizeof ep) != 0) ep[0] = 0;
+        snprintf(p, sizeof p, "%s/sys/devices/system/cpu/intel_pstate/no_turbo", root);
+        if (read_file(p, nt, sizeof nt) != 0) nt[0] = 0;
+        snprintf(p, sizeof p, "%s/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", root);
+        if (read_file(p, mx, sizeof mx) != 0) mx[0] = 0;
+        snprintf(p, sizeof p, "%s/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq", root);
+        if (read_file(p, mn, sizeof mn) != 0) mn[0] = 0;
         sb_kv_str(&s, "model", model, &cf);
         sb_kv_num(&s, "threads", threads, &cf);
         sb_kv_str(&s, "microcode", mc, &cf);
+        sb_kv_str(&s, "governor", gv, &cf);
+        sb_kv_str(&s, "epp", ep, &cf);
+        if (nt[0]) sb_kv_num(&s, "turbo", nt[0] == '0' ? 1 : 0, &cf);
+        if (mx[0]) sb_kv_num(&s, "max_mhz", atof(mx) / 1000.0, &cf);
+        if (mn[0]) sb_kv_num(&s, "min_mhz", atof(mn) / 1000.0, &cf);
     }
     sb_raw(&s, "}");
 
@@ -612,6 +791,16 @@ int ts_inventory_json(const char *sysroot, char *buf, size_t cap)
                 sb_kv_str(&s, "kind", !strncmp(nm, "nvme", 4) ? "nvme" : (rot[0] == '1' ? "hdd" : "ssd"), &ff);
                 sb_kv_str(&s, "model", model, &ff);
                 sb_kv_num(&s, "gb", sectors * 512.0 / 1e9, &ff);
+                int ctl = -1;
+                if (sscanf(nm, "nvme%d", &ctl) == 1) {          /* the PCIe link of the controller: speed and width now and at most */
+                    static const char *lf[4] = { "current_link_speed", "current_link_width", "max_link_speed", "max_link_width" };
+                    static const char *ln[4] = { "link_gts", "link_width", "link_max_gts", "link_max_width" };
+                    for (int q = 0; q < 4; q++) {
+                        char lp[600], lb[48];
+                        snprintf(lp, sizeof lp, "%s/sys/class/nvme/nvme%d/device/%s", root, ctl, lf[q]);
+                        if (read_file(lp, lb, sizeof lb) == 0 && lb[0] >= '0' && lb[0] <= '9') sb_kv_num(&s, ln[q], atof(lb), &ff);
+                    }
+                }
                 sb_raw(&s, "}");
             }
             globfree(&g);
@@ -623,7 +812,8 @@ int ts_inventory_json(const char *sysroot, char *buf, size_t cap)
     sb_raw(&s, ",\"gpus\":[");
     {
         glob_t g;
-        int firstg = 1;
+        int firstg = 1, nvidia_k = 0;
+        if (is_real(sysroot)) smi_inventory(); else smi_inv_n = 0;
         snprintf(p, sizeof p, "%s/sys/class/drm/card[0-9]", root);
         if (globber(p, &g) == 0) {
             for (size_t i = 0; i < g.gl_pathc; i++) {
@@ -645,7 +835,17 @@ int ts_inventory_json(const char *sysroot, char *buf, size_t cap)
                 {
                     char gname[160];
                     pci_name(root, ven, dev, gname, sizeof gname);
-                    sb_kv_str(&s, "name", gname, &ff);
+                    if (!strcmp(ven, "0x10de") && is_real(sysroot) && nvidia_k < smi_inv_n) {
+                        if (smi_inv_name[nvidia_k][0]) snprintf(gname, sizeof gname, "%s", smi_inv_name[nvidia_k]);
+                        sb_kv_str(&s, "name", gname, &ff);
+                        sb_kv_str(&s, "driver_version", smi_inv_drv[nvidia_k], &ff);
+                        if (smi_inv_vram[nvidia_k] > 0) sb_kv_num(&s, "vram_mb", smi_inv_vram[nvidia_k], &ff);
+                        if (smi_inv_gen[nvidia_k] > 0) sb_kv_num(&s, "pcie_gen_max", smi_inv_gen[nvidia_k], &ff);
+                        if (smi_inv_wid[nvidia_k] > 0) sb_kv_num(&s, "pcie_width_max", smi_inv_wid[nvidia_k], &ff);
+                        nvidia_k++;
+                    } else {
+                        sb_kv_str(&s, "name", gname, &ff);
+                    }
                 }
                 sb_raw(&s, "}");
             }

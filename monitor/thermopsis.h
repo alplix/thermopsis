@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-#define TS_MAX_READINGS 256
+#define TS_MAX_READINGS 512
 #define TS_KEY_LEN 96
 
 /* One sensor value. key = "<kind>.<source>.<name>", kind: t temperature (C), f fan, p power (W), c clock (MHz), u utilisation or load,
