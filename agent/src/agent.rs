@@ -51,6 +51,8 @@ pub fn run(cfg: &Config, opt: &Options, quit: &Arc<AtomicBool>, log: &dyn Fn(&st
     let mut window = Window::new(crate::now());
     let (mut last_sample, mut last_poll) = (Instant::now() - Duration::from_secs(opt.sample_s), Instant::now() - Duration::from_secs(opt.poll_s));
     let mut last_report = Instant::now();
+    // drive health changes slowly: once an hour is enough (and with the first report)
+    let mut last_disks: Option<Instant> = None;
     log(&format!("running: a reading every {} s, a report every {} s", opt.sample_s, opt.report_s));
     loop {
         if quit.load(Ordering::Relaxed) {
@@ -109,7 +111,13 @@ pub fn run(cfg: &Config, opt: &Options, quit: &Arc<AtomicBool>, log: &dyn Fn(&st
             let evs: Vec<Value> = events.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default();
             if !window.is_empty() {
                 let inv = if inventory_sent { None } else { Some(&inventory) };
-                queue.push_back(window.report(now, &inv_hash, inv, vec![], evs));
+                let disks = if last_disks.map_or(true, |t| t.elapsed().as_secs() >= 3500) {
+                    last_disks = Some(Instant::now());
+                    crate::windisk::read(true).1
+                } else {
+                    vec![]
+                };
+                queue.push_back(window.report(now, &inv_hash, inv, disks, evs));
                 inventory_sent = true;
             } else if !evs.is_empty() {
                 // results without a window of readings: send them in a report of their own (one reading of what there is)

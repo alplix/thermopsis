@@ -100,6 +100,7 @@ impl Sensors for Generic {
             out.push((format!("t.{}.{}", src, clean(label)), *t));
         }
         out.extend(crate::nvidia::read());
+        out.extend(crate::windisk::read(false).0);
         out
     }
 }

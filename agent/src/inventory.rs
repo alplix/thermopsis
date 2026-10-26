@@ -143,6 +143,29 @@ fn physical_disks() -> Option<Vec<Value>> {
     }
 }
 
+/// drive number -> size in GB (Windows: Get-PhysicalDisk); empty elsewhere
+pub fn disk_sizes() -> std::collections::HashMap<u32, u64> {
+    let mut m = std::collections::HashMap::new();
+    #[cfg(windows)]
+    {
+        let text = run("powershell", &["-NoProfile", "-NonInteractive", "-Command", "Get-PhysicalDisk | Select-Object DeviceId,Size | ConvertTo-Json -Compress"]);
+        if let Ok(v) = serde_json::from_str::<Value>(&text) {
+            let items: Vec<Value> = match v {
+                Value::Array(a) => a,
+                o @ Value::Object(_) => vec![o],
+                _ => vec![],
+            };
+            for it in items {
+                let id = it["DeviceId"].as_str().and_then(|s| s.parse::<u32>().ok()).or_else(|| it["DeviceId"].as_u64().map(|n| n as u32));
+                if let (Some(id), Some(size)) = (id, it["Size"].as_u64()) {
+                    m.insert(id, size / 1_000_000_000);
+                }
+            }
+        }
+    }
+    m
+}
+
 pub fn collect() -> Value {
     let mut sys = System::new();
     sys.refresh_cpu_all();

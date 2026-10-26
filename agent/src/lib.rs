@@ -7,6 +7,7 @@ pub mod proto;
 pub mod report;
 pub mod selftest;
 pub mod sensors;
+pub mod windisk;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

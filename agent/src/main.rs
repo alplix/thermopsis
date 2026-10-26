@@ -20,6 +20,7 @@ fn help() {
     println!("  logout                                     sign this device out");
     println!("  once                                       print one report (nothing is sent)");
     println!("  inventory                                  print the hardware description that is sent");
+    println!("  disks                                      print drive temperatures and health (Windows)");
     println!("  test <memtest|membw|stress|diskbench> [--secs N] [--pct N]   run one test here");
 }
 
@@ -104,6 +105,11 @@ fn main() {
                     }
                 }
             }
+        }
+        "disks" => {
+            let (temps, drives) = thermopsis_agent::windisk::read(true);
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({"temperatures": temps, "drives": drives})).unwrap_or_default());
+            0
         }
         "inventory" => {
             println!("{}", serde_json::to_string_pretty(&inventory::collect()).unwrap_or_default());
