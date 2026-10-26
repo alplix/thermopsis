@@ -1,0 +1,26 @@
+Thermopsis
+
+Copyright (c) 2026 Alperen Yavuz. All rights reserved.
+
+This software and its source code are proprietary. The source code is published
+so that volunteers can inspect what the monitor reads and what it sends.
+
+Permission is granted, free of charge, to:
+
+  1. read and inspect the source code;
+  2. run the official compiled monitor that is distributed through the BitBOINC
+     project (https://bitboinc.athena.org.tr/) as part of taking part in that
+     project.
+
+Without prior written permission of the copyright holder you may not copy,
+modify, redistribute, sublicense or sell the software or any part of it, in
+source or binary form, you may not create derivative works from it, and you may
+not run a modified or independently built version of it against the BitBOINC
+project or any other project of the copyright holder.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
