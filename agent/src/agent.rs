@@ -39,6 +39,9 @@ const QUEUE_MAX: usize = 144;
 pub fn run(cfg: &Config, opt: &Options, quit: &Arc<AtomicBool>, log: &dyn Fn(&str)) -> Stop {
     let client = Client::new(&cfg.server);
     let token = cfg.token.clone();
+    if let Err(e) = crate::driver::start() {
+        log(&format!("driver mode: {}", e));
+    }
     let mut sensors = Generic::new();
     let inventory = crate::inventory::collect();
     let inv_hash = inventory_hash(&inventory);

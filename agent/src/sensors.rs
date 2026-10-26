@@ -101,6 +101,7 @@ impl Sensors for Generic {
         }
         out.extend(crate::nvidia::read());
         out.extend(crate::windisk::read(false).0);
+        out.extend(crate::driver::read());
         out
     }
 }

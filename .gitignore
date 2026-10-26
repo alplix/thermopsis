@@ -1,2 +1,7 @@
 agent/target/
 *.tmp
+sensor-helper/bin/
+sensor-helper/obj/
+sensor-helper/*.json
+sensor-helper/err.txt
+agent/target/

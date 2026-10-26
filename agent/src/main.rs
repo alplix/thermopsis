@@ -20,6 +20,7 @@ fn help() {
     println!("  logout                                     sign this device out");
     println!("  once                                       print one report (nothing is sent)");
     println!("  inventory                                  print the hardware description that is sent");
+    println!("  advanced <on|off>                          driver mode: CPU and board sensors (Windows, needs the helper and the PawnIO driver)");
     println!("  disks                                      print drive temperatures and health (Windows)");
     println!("  test <memtest|membw|stress|diskbench> [--secs N] [--pct N]   run one test here");
 }
@@ -106,6 +107,19 @@ fn main() {
                 }
             }
         }
+        "advanced" => {
+            let on = args.get(1).map(|s| s.as_str()) == Some("on");
+            match thermopsis_agent::driver::set(on) {
+                Ok(()) => {
+                    println!("driver mode {} (takes effect at the next start of  run)", if on { "on: CPU and board sensors; one administrator prompt at start" } else { "off" });
+                    0
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    1
+                }
+            }
+        }
         "disks" => {
             let (temps, drives) = thermopsis_agent::windisk::read(true);
             println!("{}", serde_json::to_string_pretty(&serde_json::json!({"temperatures": temps, "drives": drives})).unwrap_or_default());
@@ -116,9 +130,12 @@ fn main() {
             0
         }
         "once" => {
+            if let Err(e) = thermopsis_agent::driver::start() {
+                eprintln!("driver mode: {}", e);
+            }
             let mut s = sensors::Generic::new();
             let _ = s.read();
-            std::thread::sleep(std::time::Duration::from_millis(1200));
+            std::thread::sleep(std::time::Duration::from_millis(if thermopsis_agent::driver::enabled() { 8000 } else { 1200 }));
             let mut w = report::Window::new(thermopsis_agent::now().saturating_sub(60));
             w.add(&s.read());
             let inv = inventory::collect();

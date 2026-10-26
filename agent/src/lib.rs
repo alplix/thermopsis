@@ -1,6 +1,7 @@
 //! Thermopsis desktop agent (library): configuration, the BitBOINC protocol client, report windows, sensors, inventory, self tests and the run loop.
 pub mod agent;
 pub mod config;
+pub mod driver;
 pub mod inventory;
 pub mod nvidia;
 pub mod proto;
