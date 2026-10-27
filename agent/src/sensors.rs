@@ -39,6 +39,8 @@ pub fn pick_cpu(labels: &[(String, f64)]) -> Option<f64> {
 pub struct Generic {
     sys: System,
     comps: Components,
+    #[cfg(target_os = "macos")]
+    power: Option<crate::macsensors::Power>,
 }
 
 impl Generic {
@@ -46,7 +48,12 @@ impl Generic {
         let mut sys = System::new();
         sys.refresh_cpu_all();
         sys.refresh_memory();
-        Generic { sys, comps: Components::new_with_refreshed_list() }
+        Generic {
+            sys,
+            comps: Components::new_with_refreshed_list(),
+            #[cfg(target_os = "macos")]
+            power: crate::macsensors::Power::new(),
+        }
     }
 }
 
@@ -102,6 +109,13 @@ impl Sensors for Generic {
         out.extend(crate::nvidia::read());
         out.extend(crate::windisk::read(false).0);
         out.extend(crate::driver::read());
+        #[cfg(target_os = "macos")]
+        {
+            out.extend(crate::macsensors::temperature_keys(&crate::macsensors::temperatures()));
+            if let Some(p) = self.power.as_mut() {
+                out.extend(p.read());
+            }
+        }
         out
     }
 }

@@ -3,6 +3,8 @@ pub mod agent;
 pub mod config;
 pub mod driver;
 pub mod inventory;
+#[cfg(target_os = "macos")]
+pub mod macsensors;
 pub mod nvidia;
 pub mod proto;
 pub mod report;
