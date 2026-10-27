@@ -41,15 +41,16 @@ struct Palette {
     accent: Color32,
     good: Color32,
     bad: Color32,
+    warn: Color32,
     line: Color32,
     round: f32,
 }
 
 fn palette(arcade: bool) -> Palette {
     if arcade {
-        Palette { bg: Color32::from_rgb(0x0d, 0x0b, 0x1e), panel: Color32::from_rgb(0x17, 0x14, 0x33), ink: Color32::from_rgb(0xe8, 0xe6, 0xff), dim: Color32::from_rgb(0x8a, 0x86, 0xb8), accent: Color32::from_rgb(0xff, 0x3e, 0xa5), good: Color32::from_rgb(0x39, 0xff, 0x88), bad: Color32::from_rgb(0xff, 0x6b, 0x4a), line: Color32::from_rgb(0x29, 0xd8, 0xff), round: 0.0 }
+        Palette { bg: Color32::from_rgb(0x0d, 0x0b, 0x1e), panel: Color32::from_rgb(0x17, 0x14, 0x33), ink: Color32::from_rgb(0xe8, 0xe6, 0xff), dim: Color32::from_rgb(0x8a, 0x86, 0xb8), accent: Color32::from_rgb(0xff, 0x3e, 0xa5), good: Color32::from_rgb(0x39, 0xff, 0x88), bad: Color32::from_rgb(0xff, 0x4d, 0x4d), warn: Color32::from_rgb(0xff, 0xd1, 0x3b), line: Color32::from_rgb(0x29, 0xd8, 0xff), round: 0.0 }
     } else {
-        Palette { bg: Color32::from_rgb(0xf6, 0xf1, 0xe7), panel: Color32::from_rgb(0xfd, 0xfa, 0xf3), ink: Color32::from_rgb(0x2b, 0x2a, 0x28), dim: Color32::from_rgb(0x7a, 0x74, 0x69), accent: Color32::from_rgb(0xb8, 0x4a, 0x1f), good: Color32::from_rgb(0x2f, 0x7d, 0x4f), bad: Color32::from_rgb(0xb3, 0x26, 0x1e), line: Color32::from_rgb(0xd9, 0xd0, 0xbd), round: 6.0 }
+        Palette { bg: Color32::from_rgb(0xf6, 0xf1, 0xe7), panel: Color32::from_rgb(0xfd, 0xfa, 0xf3), ink: Color32::from_rgb(0x2b, 0x2a, 0x28), dim: Color32::from_rgb(0x7a, 0x74, 0x69), accent: Color32::from_rgb(0xb8, 0x4a, 0x1f), good: Color32::from_rgb(0x2f, 0x7d, 0x4f), bad: Color32::from_rgb(0xb3, 0x26, 0x1e), warn: Color32::from_rgb(0xc7, 0x8a, 0x12), line: Color32::from_rgb(0xd9, 0xd0, 0xbd), round: 6.0 }
     }
 }
 
@@ -72,14 +73,77 @@ fn apply(ctx: &egui::Context, p: &Palette, arcade: bool) {
     v.widgets.active.weak_bg_fill = p.accent;
     ctx.set_visuals(v);
     let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(12.0, 6.0);
-    if arcade {
-        for (_, f) in style.text_styles.iter_mut() {
-            f.family = egui::FontFamily::Monospace;
+    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
+    style.spacing.button_padding = egui::vec2(14.0, 8.0);
+    style.spacing.window_margin = egui::Margin::same(16.0);
+    use egui::TextStyle::*;
+    let pix = egui::FontFamily::Name("pixel".into());
+    for (t, size_paper, size_arcade) in [(Heading, 22.0, 16.0), (Body, 15.0, 10.0), (Button, 15.0, 10.0), (Small, 12.0, 8.0), (Monospace, 13.0, 9.0)] {
+        if let Some(f) = style.text_styles.get_mut(&t) {
+            f.size = if arcade { size_arcade } else { size_paper };
+            if arcade {
+                f.family = pix.clone();
+            } else if t != Monospace {
+                f.family = egui::FontFamily::Proportional;
+            } else {
+                f.family = egui::FontFamily::Monospace;
+            }
         }
     }
     ctx.set_style(style);
+}
+
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert("pixel".into(), egui::FontData::from_static(include_bytes!("../../assets/PressStart2P.ttf")));
+    fonts.families.insert(egui::FontFamily::Name("pixel".into()), vec!["pixel".into()]);
+    ctx.set_fonts(fonts);
+}
+
+fn pix(arcade: bool, size: f32) -> FontId {
+    if arcade { FontId::new(size * 0.7, egui::FontFamily::Name("pixel".into())) } else { FontId::proportional(size) }
+}
+
+/// temperature colour: calm below 60, warm below 80, hot above
+fn heat(p: &Palette, t: f64) -> Color32 {
+    if t < 60.0 { p.good } else if t < 80.0 { p.warn } else { p.bad }
+}
+
+/// one reading as a card: name, big value, a gauge (blocks in arcade, a bar in paper); no value -> "--" and an empty gauge
+fn card(ui: &mut egui::Ui, p: &Palette, arcade: bool, width: f32, name: &str, reading: Option<(String, f32, Color32)>) {
+    let size = egui::vec2(width, 92.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let color = reading.as_ref().map(|r| r.2).unwrap_or(p.dim);
+    painter.rect(rect, Rounding::same(p.round), p.panel, Stroke::new(if arcade { 2.0_f32 } else { 1.0_f32 }, if arcade && reading.is_some() { color } else { p.line }));
+    if !arcade {
+        painter.rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(5.0, rect.height())), Rounding { nw: p.round, sw: p.round, ne: 0.0, se: 0.0 }, color);
+    }
+    let pad = 14.0;
+    painter.text(rect.min + egui::vec2(pad, 11.0), egui::Align2::LEFT_TOP, name, pix(arcade, 12.0), p.dim);
+    let (text, frac) = reading.as_ref().map(|r| (r.0.clone(), r.1)).unwrap_or(("--".to_string(), 0.0));
+    painter.text(rect.min + egui::vec2(pad, 31.0), egui::Align2::LEFT_TOP, text, pix(arcade, 24.0), if reading.is_some() { p.ink } else { p.dim });
+    let bar = egui::Rect::from_min_size(rect.min + egui::vec2(pad, 68.0), egui::vec2(size.x - 2.0 * pad, 9.0));
+    let frac = frac.clamp(0.0, 1.0);
+    if arcade {
+        let n = 10;
+        let w = (bar.width() - 2.0 * (n as f32 - 1.0)) / n as f32;
+        for i in 0..n {
+            let r = egui::Rect::from_min_size(bar.min + egui::vec2(i as f32 * (w + 2.0), 0.0), egui::vec2(w, bar.height()));
+            let on = (i as f32 + 0.5) / n as f32 <= frac;
+            painter.rect_filled(r, Rounding::ZERO, if on { color } else { p.line.gamma_multiply(0.25) });
+        }
+    } else {
+        painter.rect_filled(bar, Rounding::same(4.5), p.line.gamma_multiply(0.5));
+        painter.rect_filled(egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * frac, bar.height())), Rounding::same(4.5), color);
+    }
+}
+
+fn chip(ui: &mut egui::Ui, p: &Palette, arcade: bool, text: &str, color: Color32) {
+    egui::Frame::none().fill(color.gamma_multiply(0.18)).stroke(Stroke::new(1.0_f32, color)).rounding(Rounding::same(if arcade { 0.0 } else { 20.0 })).inner_margin(egui::Margin::symmetric(10.0, 4.0)).show(ui, |ui| {
+        ui.label(RichText::new(text).font(pix(arcade, 12.0)).color(color));
+    });
+    let _ = p;
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -132,36 +196,45 @@ impl App {
     }
 
     fn login_view(&mut self, ui: &mut egui::Ui, p: &Palette) {
-        ui.add_space(30.0);
-        ui.label(RichText::new("THERMOPSIS").font(FontId::monospace(30.0)).color(p.accent));
-        ui.label(RichText::new("Temperatures, power and drive health of this computer, reported to your BitBOINC account.").color(p.dim));
-        ui.add_space(14.0);
-        ui.label("Weak account key (BitBOINC account page):");
-        ui.add(egui::TextEdit::singleline(&mut self.key).password(true).desired_width(360.0));
-        ui.label("Name of this computer on the website:");
-        ui.add(egui::TextEdit::singleline(&mut self.cfg.name).desired_width(360.0));
-        if ui.button("Sign in").clicked() {
-            match proto::Client::new(&self.cfg.server).login(self.key.trim(), &self.cfg.device, &self.cfg.name) {
-                Ok((token, user)) => {
-                    self.cfg.token = token;
-                    self.cfg.user = user;
-                    let _ = config::save(&self.cfg);
-                    self.key.clear();
-                    self.login_msg.clear();
-                    self.start_agent();
+        let arcade = self.arcade();
+        ui.add_space(24.0);
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new("THERMOPSIS").font(pix(arcade, 40.0)).color(p.accent));
+            ui.label(RichText::new("Temperatures, power and drive health of this computer,").color(p.dim));
+            ui.label(RichText::new("reported to your BitBOINC account.").color(p.dim));
+            ui.add_space(18.0);
+            egui::Frame::none().fill(p.panel).stroke(Stroke::new(if arcade { 2.0_f32 } else { 1.0_f32 }, p.line)).rounding(Rounding::same(p.round)).inner_margin(20.0).show(ui, |ui| {
+                ui.set_width(380.0);
+                ui.label(RichText::new("Weak account key").color(p.dim));
+                ui.add(egui::TextEdit::singleline(&mut self.key).password(true).hint_text("on your BitBOINC account page").desired_width(f32::INFINITY));
+                ui.label(RichText::new("Name of this computer").color(p.dim));
+                ui.add(egui::TextEdit::singleline(&mut self.cfg.name).desired_width(f32::INFINITY));
+                ui.add_space(6.0);
+                if ui.add_sized([ui.available_width(), 36.0], egui::Button::new(RichText::new("Sign in").color(if arcade { p.bg } else { Color32::WHITE })).fill(p.accent)).clicked() {
+                    match proto::Client::new(&self.cfg.server).login(self.key.trim(), &self.cfg.device, &self.cfg.name) {
+                        Ok((token, user)) => {
+                            self.cfg.token = token;
+                            self.cfg.user = user;
+                            let _ = config::save(&self.cfg);
+                            self.key.clear();
+                            self.login_msg.clear();
+                            self.start_agent();
+                        }
+                        Err(proto::ApiError::Http(401, _)) => self.login_msg = "The key was not accepted.".into(),
+                        Err(proto::ApiError::Http(429, _)) => self.login_msg = "Too many wrong attempts: wait an hour.".into(),
+                        Err(proto::ApiError::Http(409, _)) => self.login_msg = "This account already has 10 devices: sign one out on the website.".into(),
+                        Err(e) => self.login_msg = format!("Sign-in failed: {}", e),
+                    }
                 }
-                Err(proto::ApiError::Http(401, _)) => self.login_msg = "The key was not accepted.".into(),
-                Err(proto::ApiError::Http(429, _)) => self.login_msg = "Too many wrong attempts: wait an hour.".into(),
-                Err(proto::ApiError::Http(409, _)) => self.login_msg = "This account already has 10 devices: sign one out on the website.".into(),
-                Err(e) => self.login_msg = format!("Sign-in failed: {}", e),
-            }
-        }
-        if !self.login_msg.is_empty() {
-            ui.label(RichText::new(&self.login_msg).color(p.bad));
-        }
+                if !self.login_msg.is_empty() {
+                    ui.label(RichText::new(&self.login_msg).color(p.bad));
+                }
+            });
+        });
     }
 
     fn live_view(&mut self, ui: &mut egui::Ui, p: &Palette) {
+        let arcade = self.arcade();
         let live = agent::LIVE.lock().map(|l| l.clone()).unwrap_or_default();
         let find = |pre: &str, suf: &str| live.readings.iter().filter(|(k, _)| k.starts_with(pre) && k.ends_with(suf)).map(|(_, v)| *v).fold(None, |a: Option<f64>, v| Some(a.map_or(v, |m| m.max(v))));
         let cpu = find("t.win.cpu.", "package").or_else(|| find("t.", "package")).or_else(|| find("t.cpu", ""));
@@ -171,29 +244,50 @@ impl App {
         let cpu_w = find("p.win.cpu.", "package");
         let gpu_w = find("p.nvml.", ".board");
         let load = find("u.cpu", "");
-        ui.horizontal_wrapped(|ui| {
-            for (name, v, unit) in [("CPU", cpu, "°C"), ("GPU", gpu, "°C"), ("NVMe", nvme, "°C"), ("SATA", sata, "°C"), ("CPU power", cpu_w, "W"), ("GPU power", gpu_w, "W"), ("CPU load", load, "%")] {
-                let Some(v) = v else { continue };
-                egui::Frame::none().fill(p.panel).stroke(Stroke::new(if p.round == 0.0 { 2.0_f32 } else { 1.0_f32 }, p.line)).rounding(Rounding::same(p.round)).inner_margin(12.0).show(ui, |ui| {
-                    ui.set_min_width(130.0);
-                    ui.label(RichText::new(name).color(p.dim));
-                    ui.label(RichText::new(format!("{:.0} {}", v, unit)).font(FontId::monospace(22.0)).color(p.accent));
-                });
-            }
+        let mem = find("m.", "used_percent");
+        let gap = 12.0;
+        let w = ((ui.available_width() - 3.0 * gap) / 4.0).floor();
+        let temp = |v: Option<f64>| v.map(|v| (format!("{:.0}\u{b0}C", v), (v / 100.0) as f32, heat(p, v)));
+        let watt = |v: Option<f64>, max: f64| v.map(|v| (format!("{:.0} W", v), (v / max) as f32, p.accent));
+        let pct = |v: Option<f64>| v.map(|v| (format!("{:.0}%", v), (v / 100.0) as f32, p.line));
+        ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
+        ui.horizontal(|ui| {
+            card(ui, p, arcade, w, "CPU", temp(cpu));
+            card(ui, p, arcade, w, "GPU", temp(gpu));
+            card(ui, p, arcade, w, "NVMe", temp(nvme));
+            card(ui, p, arcade, w, "SATA", temp(sata));
+        });
+        ui.horizontal(|ui| {
+            card(ui, p, arcade, w, "CPU power", watt(cpu_w, 150.0));
+            card(ui, p, arcade, w, "GPU power", watt(gpu_w, 350.0));
+            card(ui, p, arcade, w, "CPU load", pct(load));
+            card(ui, p, arcade, w, "Memory", pct(mem));
         });
         if live.readings.is_empty() {
-            ui.label(RichText::new("The first reading comes within a minute.").color(p.dim));
+            ui.label(RichText::new("Waiting for the first reading...").color(p.dim));
+        } else if cpu.is_none() && cfg!(windows) && !driver::enabled() {
+            ui.label(RichText::new("CPU temperature and power need driver mode (Settings).").color(p.dim));
         }
-        ui.add_space(6.0);
-        ui.label(RichText::new(format!("{} readings   reports sent: {}   waiting: {}{}", live.readings.len(), live.sent, live.queued, if live.test_running { "   test running" } else { "" })).color(p.dim));
-        if cpu.is_none() && cfg!(windows) && !driver::enabled() {
-            ui.label(RichText::new("CPU temperature and power need the driver mode (Settings).").color(p.dim));
-        }
-        ui.separator();
-        egui::ScrollArea::vertical().max_height(150.0).stick_to_bottom(true).show(ui, |ui| {
-            for line in &live.log {
-                ui.label(RichText::new(line).font(FontId::monospace(12.0)).color(p.dim));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            chip(ui, p, arcade, &format!("{} readings", live.readings.len()), p.dim);
+            chip(ui, p, arcade, &format!("sent {}", live.sent), p.good);
+            if live.queued > 0 {
+                chip(ui, p, arcade, &format!("waiting {}", live.queued), p.warn);
             }
+            if live.test_running {
+                chip(ui, p, arcade, "test running", p.accent);
+            }
+        });
+        ui.add_space(4.0);
+        egui::Frame::none().fill(p.panel).stroke(Stroke::new(1.0_f32, p.line)).rounding(Rounding::same(p.round)).inner_margin(8.0).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.set_min_height((ui.available_height() - 12.0).max(40.0));
+            egui::ScrollArea::vertical().max_height((ui.available_height() - 4.0).max(40.0)).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
+                for line in live.log.iter().rev().take(40).rev() {
+                    ui.label(RichText::new(line).font(FontId::monospace(11.0)).color(p.dim));
+                }
+            });
         });
     }
 
@@ -281,13 +375,24 @@ impl eframe::App for App {
                 return;
             }
             ui.horizontal(|ui| {
-                ui.label(RichText::new("THERMOPSIS").font(FontId::monospace(18.0)).color(p.accent));
-                ui.add_space(12.0);
-                ui.selectable_value(&mut self.tab, Tab::Live, "Live");
-                ui.selectable_value(&mut self.tab, Tab::Tests, "Tests");
-                ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
+                ui.label(RichText::new("THERMOPSIS").font(pix(arcade, 22.0)).color(p.accent));
+                ui.add_space(8.0);
+                let on = self.agent_running;
+                chip(ui, &p, arcade, if on { "connected" } else { "stopped" }, if on { p.good } else { p.bad });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(&self.cfg.user).color(p.dim));
+                });
             });
-            ui.separator();
+            ui.horizontal(|ui| {
+                for (t, label) in [(Tab::Live, "Live"), (Tab::Tests, "Tests"), (Tab::Settings, "Settings")] {
+                    let sel = self.tab == t;
+                    let b = egui::Button::new(RichText::new(label).color(if sel { if arcade { p.bg } else { Color32::WHITE } } else { p.ink })).fill(if sel { p.accent } else { p.panel });
+                    if ui.add(b).clicked() {
+                        self.tab = t;
+                    }
+                }
+            });
+            ui.add_space(2.0);
             match self.tab {
                 Tab::Live => self.live_view(ui, &p),
                 Tab::Tests => self.tests_view(ui, &p),
@@ -312,11 +417,12 @@ fn main() -> eframe::Result<()> {
         let _ = driver::start();
     }
     app.start_agent();
-    let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([620.0, 460.0]).with_title("Thermopsis"), ..Default::default() };
+    let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([760.0, 500.0]).with_min_inner_size([620.0, 420.0]).with_title("Thermopsis"), ..Default::default() };
     eframe::run_native(
         "Thermopsis",
         opts,
         Box::new(|cc| {
+            install_fonts(&cc.egui_ctx);
             use tray_icon::menu::{Menu, MenuEvent, MenuItem};
             let (show, quit) = (MenuItem::with_id("show", "Open Thermopsis", true, None), MenuItem::with_id("quit", "Quit", true, None));
             let menu = Menu::new();
