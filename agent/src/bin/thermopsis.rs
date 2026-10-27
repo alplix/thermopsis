@@ -6,6 +6,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use thermopsis_agent::{agent, config, driver, proto, selftest, sensors::Generic};
 
+/// 32x32 pixel-art thermometer for the tray: dark rim, light tube with a red column, red bulb
+fn tray_icon_rgba() -> Vec<u8> {
+    let mut px = vec![0u8; 32 * 32 * 4];
+    let mut put = |x: usize, y: usize, c: [u8; 4]| px[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4].copy_from_slice(&c);
+    let (rim, tube, red) = ([0x17, 0x14, 0x33, 255], [0xf6, 0xf1, 0xe7, 255], [0xff, 0x3e, 0xa5, 255]);
+    for y in 3..22 {
+        for x in 12..20 {
+            put(x, y, if x == 12 || x == 19 || y == 3 { rim } else { tube });
+        }
+    }
+    for y in 9..22 {
+        for x in 14..18 {
+            put(x, y, red);
+        }
+    }
+    for y in 18..30 {
+        for x in 8..24 {
+            let (dx, dy) = (x as f32 - 15.5, y as f32 - 23.5);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d <= 6.5 {
+                put(x, y, if d > 5.2 { rim } else { red });
+            }
+        }
+    }
+    px
+}
+
 struct Palette {
     bg: Color32,
     panel: Color32,
@@ -73,6 +100,8 @@ struct App {
     test_out: Arc<Mutex<String>>,
     test_busy: Arc<AtomicBool>,
     shown_theme: String,
+    quitting: Arc<AtomicBool>,
+    _tray: Option<tray_icon::TrayIcon>,
 }
 
 impl App {
@@ -228,6 +257,10 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting.load(Ordering::Relaxed) && self._tray.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
         let arcade = self.arcade();
         if self.shown_theme != self.cfg.theme {
             apply(ctx, &palette(arcade), arcade);
@@ -271,7 +304,7 @@ impl eframe::App for App {
 
 fn main() -> eframe::Result<()> {
     let cfg = config::load();
-    let mut app = App { cfg, tab: Tab::Live, key: String::new(), login_msg: String::new(), quit: Arc::new(AtomicBool::new(false)), agent_running: false, stopped_note: Arc::new(Mutex::new(String::new())), test_out: Arc::new(Mutex::new(String::new())), test_busy: Arc::new(AtomicBool::new(false)), shown_theme: String::new() };
+    let mut app = App { cfg, tab: Tab::Live, key: String::new(), login_msg: String::new(), quit: Arc::new(AtomicBool::new(false)), agent_running: false, stopped_note: Arc::new(Mutex::new(String::new())), test_out: Arc::new(Mutex::new(String::new())), test_busy: Arc::new(AtomicBool::new(false)), shown_theme: String::new(), quitting: Arc::new(AtomicBool::new(false)), _tray: None };
     if let Ok(t) = std::env::var("THERMOPSIS_THEME") {
         app.cfg.theme = t;
     }
@@ -280,5 +313,33 @@ fn main() -> eframe::Result<()> {
     }
     app.start_agent();
     let opts = eframe::NativeOptions { viewport: egui::ViewportBuilder::default().with_inner_size([620.0, 460.0]).with_title("Thermopsis"), ..Default::default() };
-    eframe::run_native("Thermopsis", opts, Box::new(|_cc| Ok(Box::new(app))))
+    eframe::run_native(
+        "Thermopsis",
+        opts,
+        Box::new(|cc| {
+            use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+            let (show, quit) = (MenuItem::with_id("show", "Open Thermopsis", true, None), MenuItem::with_id("quit", "Quit", true, None));
+            let menu = Menu::new();
+            let _ = menu.append_items(&[&show, &quit]);
+            let icon = tray_icon::Icon::from_rgba(tray_icon_rgba(), 32, 32).ok();
+            let tray = icon.and_then(|i| tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("Thermopsis").with_icon(i).build().ok());
+            if tray.is_some() {
+                let (ctx, quitting, stop) = (cc.egui_ctx.clone(), app.quitting.clone(), app.quit.clone());
+                MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
+                    if e.id.0 == "show" {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    } else if e.id.0 == "quit" {
+                        quitting.store(true, Ordering::Relaxed);
+                        stop.store(true, Ordering::Relaxed);
+                        std::process::exit(0);
+                    }
+                    ctx.request_repaint();
+                }));
+            }
+            let mut app = app;
+            app._tray = tray;
+            Ok(Box::new(app))
+        }),
+    )
 }

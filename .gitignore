@@ -5,3 +5,4 @@ sensor-helper/obj/
 sensor-helper/*.json
 sensor-helper/err.txt
 agent/target/
+dist/
