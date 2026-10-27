@@ -11,6 +11,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// What the window shows: the latest readings, the last log lines, how many reports wait. Filled by the run loop.
+#[derive(Default, Clone)]
+pub struct Live {
+    pub readings: Vec<(String, f64)>,
+    pub log: Vec<String>,
+    pub queued: usize,
+    pub sent: u64,
+    pub test_running: bool,
+}
+
+pub static LIVE: Mutex<Live> = Mutex::new(Live { readings: Vec::new(), log: Vec::new(), queued: 0, sent: 0, test_running: false });
+
+fn live(f: impl FnOnce(&mut Live)) {
+    if let Ok(mut l) = LIVE.lock() {
+        f(&mut l);
+    }
+}
+
 pub struct Options {
     pub sample_s: u64,
     pub report_s: u64,
@@ -36,7 +54,16 @@ pub enum Stop {
 
 const QUEUE_MAX: usize = 144;
 
-pub fn run(cfg: &Config, opt: &Options, quit: &Arc<AtomicBool>, log: &dyn Fn(&str)) -> Stop {
+pub fn run(cfg: &Config, opt: &Options, quit: &Arc<AtomicBool>, log_out: &dyn Fn(&str)) -> Stop {
+    let log = |m: &str| {
+        live(|l| {
+            l.log.push(m.to_string());
+            if l.log.len() > 60 {
+                l.log.remove(0);
+            }
+        });
+        log_out(m);
+    };
     let client = Client::new(&cfg.server);
     let token = cfg.token.clone();
     if let Err(e) = crate::driver::start() {
@@ -63,7 +90,9 @@ pub fn run(cfg: &Config, opt: &Options, quit: &Arc<AtomicBool>, log: &dyn Fn(&st
         }
         if last_sample.elapsed().as_secs() >= opt.sample_s {
             last_sample = Instant::now();
-            window.add(&sensors.read());
+            let r = sensors.read();
+            window.add(&r);
+            live(|l| l.readings = r);
         }
         if last_poll.elapsed().as_secs() >= opt.poll_s && !busy.load(Ordering::Relaxed) {
             last_poll = Instant::now();
@@ -133,12 +162,17 @@ pub fn run(cfg: &Config, opt: &Options, quit: &Arc<AtomicBool>, log: &dyn Fn(&st
                 queue.pop_front();
             }
         }
+        live(|l| {
+            l.queued = queue.len();
+            l.test_running = busy.load(Ordering::Relaxed);
+        });
         // send what waits, oldest first
         while let Some(front) = queue.front() {
             match client.report(&token, front) {
                 Ok(()) => {
                     log("report sent");
                     queue.pop_front();
+                    live(|l| l.sent += 1);
                 }
                 Err(ApiError::Http(401, _)) => return Stop::SignedOut,
                 Err(ApiError::Http(429, _)) => break,                     // too fast: try again in a moment
